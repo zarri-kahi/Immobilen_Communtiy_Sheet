@@ -1,0 +1,77 @@
+name: Release on Tag
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on tags starting with 'v'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install Dependencies
+      run: |
+        pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+
+    - name: Duplicate Google Sheet
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        TEMPLATE_SHEET_ID: "1UmCNX30Eu3Quu7l5jNXMi7JuUeuLGyv-eqbtDNtL5lk" 
+      run: |
+        python <<EOF
+        import json
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+
+        # Load Google Service Account Credentials
+        credentials = json.loads(r"""${{ secrets.GOOGLE_CREDENTIALS }}""")
+        creds = Credentials.from_service_account_info(credentials, scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"])
+
+        # Build the Drive API Client
+        drive_service = build('drive', 'v3', credentials=creds)
+
+        # Duplicate the Template Sheet
+        TEMPLATE_SHEET_ID = "${{ env.TEMPLATE_SHEET_ID }}"
+        new_sheet_title = f"Community Immobilien Kalkulation - ${{ github.ref_name }}"
+        body = {
+            "name": new_sheet_title
+        }
+        new_sheet = drive_service.files().copy(
+            fileId=TEMPLATE_SHEET_ID,
+            body=body
+        ).execute()
+
+        # Make the new sheet publicly accessible
+        permission_body = {
+            "role": "reader",
+            "type": "anyone"
+        }
+        drive_service.permissions().create(
+            fileId=new_sheet['id'],
+            body=permission_body
+        ).execute()
+
+        # Output the URL of the new Google Sheet
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{new_sheet['id']}"
+        EOF
+      id: duplicate
+
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: "Release ${{ github.ref_name }}"
+        body: |
+          - [Download Google Sheet](${{ steps.duplicate.outputs.sheet_url }})
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
